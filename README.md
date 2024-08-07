@@ -15,3 +15,5 @@ Telegram Channel - [![Telegram](https://img.shields.io/badge/Telegram-%231DA1F2.
 ![Menu](https://github.com/n00bcodr/LMI-Weekly-Menu/blob/main/weekly_menu.jpg?raw=true)
 
 
+## To-do
+Find an API to send the notifications via WhatsApp Channels.
