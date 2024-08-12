@@ -4,6 +4,7 @@ on:
   schedule:
     - cron: "0 7 * * 1"   # Every Monday at 7 AM
     - cron: "0 8 * * 1"  # Every Monday at 8 AM
+    - cron: "0 9 * * 1"  # Every Monday at 9 AM
     - cron: "0 12 * * 1"  # Every Monday at 12 noon
     - cron: "0 8 * * 2"  # Tuesday at 8 AM, edgecase if Monday is a bank holiday
   workflow_dispatch:
