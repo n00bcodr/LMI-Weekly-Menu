@@ -15,10 +15,10 @@ jobs:
 
     steps:
     - name: Checkout repository
-      uses: actions/checkout@main
+      uses: actions/checkout@v4.2.1
 
     - name: Set up Python
-      uses: actions/setup-python@main
+      uses: actions/setup-python@v5.2.0
       with:
         python-version: '3.x'
 
@@ -51,7 +51,7 @@ jobs:
         git commit -m "📜Update weekly menu for week starting ${{ env.MONDAY_DATE }} 😋"
 
     - name: Push changes
-      uses: ad-m/github-push-action@main
+      uses: ad-m/github-push-action@v0.8.0
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
         branch: main
