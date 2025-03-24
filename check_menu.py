@@ -5,7 +5,7 @@ import hashlib
 import datetime
 
 # Define the URL of the page
-url = "https://www.ericssondining.ie/post/menu-week-17-03-25"
+url = "https://www.ericssondining.ie/post/menu-24-03-25"
 
 # Define the path to save the image
 img_path = "weekly_menu.jpg"  # Save to the root of the repo
