@@ -4,9 +4,6 @@ import os
 import hashlib
 import datetime
 
-# Define the URL of the page
-url = "https://www.ericssondining.ie/post/menu-24-03-25"
-
 # Define the path to save the image
 img_path = "weekly_menu.jpg"  # Save to the root of the repo
 
@@ -36,9 +33,26 @@ def get_current_monday(date):
     """Get the Monday of the week in which the current date falls."""
     return date - datetime.timedelta(days=date.weekday())
 
-# Fetch the content from the URL
-response = requests.get(url)
-response.raise_for_status()  # Ensure we got a valid response
+# Calculate last Monday and this Monday
+today = datetime.date.today()
+last_monday = get_current_monday(today - datetime.timedelta(days=7))
+this_monday = get_current_monday(today)
+
+# Try last Monday first
+url_template = "https://www.ericssondining.ie/post/menu-{}"
+for monday in [last_monday, this_monday]:
+    url = url_template.format(monday.strftime('%d-%m-%y'))
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        print(f"Found menu at: {url}")
+        break
+    except requests.HTTPError:
+        print(f"Menu not found at: {url}")
+        continue
+else:
+    print("No menu found for last or this Monday.")
+    exit()
 
 # Parse the HTML content using BeautifulSoup
 soup = BeautifulSoup(response.content, 'html.parser')
@@ -53,9 +67,6 @@ if img_tag:
     # Download the image
     img_response = requests.get(img_url)
     img_response.raise_for_status()  # Ensure we got a valid response
-
-    # Define the path to save the image
-    img_path = 'weekly_menu.jpg'
 
     # Check if the image already exists
     if os.path.exists(img_path):
@@ -81,8 +92,7 @@ if img_tag:
             os.replace(temp_img_path, img_path)
 
             # Calculate the Monday of the current week
-            today = datetime.date.today()
-            current_monday = get_current_monday(today)
+            current_monday = get_current_monday(datetime.date.today())
 
             # Prepare the caption
             caption = f"Menu for the week starting {current_monday.strftime('%d %b %Y')}"
@@ -95,12 +105,11 @@ if img_tag:
         print(f"Image downloaded and saved as '{img_path}'")
 
         # Calculate the Monday of the current week
-        today = datetime.date.today()
-        current_monday = get_current_monday(today)
+        current_monday = get_current_monday(datetime.date.today())
 
         # Prepare the caption
         caption = f"Menu for the week starting {current_monday.strftime('%d %b %Y')}"
-
+        print (caption)
         send_telegram_photo(img_path, caption)
 else:
     print("Image not found.")
