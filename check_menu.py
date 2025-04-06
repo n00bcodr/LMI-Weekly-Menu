@@ -33,10 +33,16 @@ def get_current_monday(date):
     """Get the Monday of the week in which the current date falls."""
     return date - datetime.timedelta(days=date.weekday())
 
-# Calculate last Monday and this Monday
+# Calculate last Monday and coming Monday
 today = datetime.date.today()
-last_monday = get_current_monday(today - datetime.timedelta(days=7))
-this_monday = get_current_monday(today)
+weekday = today.weekday()  # Monday = 0, Sunday = 6
+
+if weekday >= 5:  # Saturday (5) or Sunday (6)
+    last_monday = get_current_monday(today)
+    this_monday = last_monday + datetime.timedelta(days=7)
+else:
+    last_monday = get_current_monday(today - datetime.timedelta(days=7))
+    this_monday = get_current_monday(today)
 
 # Try last Monday first
 url_template = "https://www.ericssondining.ie/post/menu-{}"
