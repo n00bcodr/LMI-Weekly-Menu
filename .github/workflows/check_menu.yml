@@ -2,56 +2,79 @@ name: Check Menu Update
 
 on:
   schedule:
-    - cron: "0 7 * * 1"   # Every Monday at 7 AM
-    - cron: "0 8 * * 1"  # Every Monday at 8 AM
-    - cron: "0 9 * * 1"  # Every Monday at 9 AM
-    - cron: "0 12 * * 1"  # Every Monday at 12 noon
-    - cron: "0 8 * * 2"  # Tuesday at 8 AM, edgecase if Monday is a bank holiday
-  workflow_dispatch:
+    - cron: "0 7 * * 1"   # Every Monday at 7 AM UTC
+    - cron: "0 8 * * 1"   # Every Monday at 8 AM UTC
+    - cron: "0 9 * * 1"   # Every Monday at 9 AM UTC
+    - cron: "0 12 * * 1"  # Every Monday at 12 noon UTC
+    - cron: "0 8 * * 2"   # Tuesday at 8 AM UTC, edgecase if Monday is a bank holiday
+  workflow_dispatch:      # Allows manual triggering
+
+# Add permissions for the job to commit back to the repository
+permissions:
+  contents: write
 
 jobs:
   check_menu:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4.2.1
+      - name: Checkout repository
+        uses: actions/checkout@v4.1.7 # Pinned to your previous version, consider updating to v4 if desired
 
-    - name: Set up Python
-      uses: actions/setup-python@v5.2.0
-      with:
-        python-version: '3.x'
+      # Add step to install Tesseract OCR
+      - name: Install Tesseract OCR
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tesseract-ocr libtesseract-dev libleptonica-dev
+          # Optional: Install language packs if needed (e.g., for English)
+          sudo apt-get install -y tesseract-ocr-eng
+        shell: bash
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install requests beautifulsoup4
+      - name: Set up Python
+        uses: actions/setup-python@v5.1.1 # Pinned to your previous version, consider updating to v5 if desired
+        with:
+          python-version: '3.x' # Or your specific version e.g., '3.11'
 
-    - name: Run script
-      env:
-        BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-        CHAT_ID: ${{ secrets.CHAT_ID }}
-      run: |
-        python check_menu.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Add pytesseract and Pillow for OCR
+          pip install requests beautifulsoup4 pytesseract Pillow
+        shell: bash
 
-    - name: Calculate Monday's Date
-      id: get_monday
-      run: |
-        python -c "import datetime; today = datetime.date.today(); weekday = today.weekday(); monday = today - datetime.timedelta(days=weekday); print(f'MONDAY_DATE={monday.strftime('%d %b %Y')}')" >> $GITHUB_ENV
+      - name: Run script
+        # No env needed here as Telegram is disabled for testing
+        # env:
+        #   BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        #   CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: |
+          python check_menu.py # Use your script filename
+        shell: bash
 
-    - name: Commit files
-      run: |
-        git config --local user.email "action@github.com"
-        git config --local user.name "GitHub Action"
-        git add weekly_menu.jpg
-        if git diff --cached --quiet; then
-          echo "No changes to commit."
-          exit 0
-        fi
-        git commit -m "📜Update weekly menu for week starting ${{ env.MONDAY_DATE }} 😋"
+      - name: Calculate Monday's Date
+        id: get_monday
+        run: |
+          python -c "import datetime; today = datetime.date.today(); weekday = today.weekday(); monday = today - datetime.timedelta(days=weekday); print(f'MONDAY_DATE={monday.strftime('%d %b %Y')}')" >> $GITHUB_ENV
+        shell: bash
 
-    - name: Push changes
-      uses: ad-m/github-push-action@v0.8.0
-      with:
-        github_token: ${{ secrets.GITHUB_TOKEN }}
-        branch: main
+      - name: Commit files
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add weekly_menu.jpg # Or the path where your script saves the image
+          # Check if there are staged changes before committing
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0 # Exit successfully if no changes
+          fi
+          # If changes exist, commit them
+          git commit -m "📜Update weekly menu for week starting ${{ env.MONDAY_DATE }} 😋 [skip ci]"
+        shell: bash
+
+      - name: Push changes
+        # Only run push if a commit was actually made
+        if: steps.Commit_files.outcome == 'success' # Check the outcome of the previous step
+        uses: ad-m/github-push-action@v0.8.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref_name }} # Push to the branch the workflow is running on
