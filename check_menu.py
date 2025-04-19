@@ -73,25 +73,25 @@ try:
     news_page_response.raise_for_status()
     news_page_soup = BeautifulSoup(news_page_response.content, 'html.parser')
 
-    # --- New Selector Logic for Pro Gallery ---
-    # Find the main gallery container first
-    # The ID 'pro-gallery-pro-blog' seems specific to this implementation
+    # Find the gallery container
     gallery_container = news_page_soup.find('div', {'id': 'pro-gallery-pro-blog'})
+    if not gallery_container:
+         gallery_container = news_page_soup.find('div', {'data-hook': 'gallery-widget-items-container'}) or \
+                             news_page_soup.find('div', class_=re.compile(r'pro-gallery'))
+
     menu_links = []
     if gallery_container:
-        # Find all links within gallery item wrappers that point to a post
-        # This looks for links within the typical structure found in news_page.html
+        # Find links within the gallery that CONTAIN /post/ in the href
         potential_links = gallery_container.find_all(
             'a',
-            href=re.compile(r'^/post/') # Regex: href starts with /post/
+            href=re.compile(r'/post/') # <-- CHANGED: Look for /post/ anywhere in href
         )
 
         # Further filter these links to ensure they are likely menu posts
         for link in potential_links:
-             # Check if 'menu' is in the link text OR in the href itself
-             link_text = link.get_text(strip=True).lower()
+             h2_text = link.find('h2')
+             link_text = (h2_text.get_text(strip=True) if h2_text else link.get_text(strip=True)).lower()
              href_text = link.get('href', '').lower()
-             # Check within parent structure as well, sometimes the text is outside the <a> but inside the item container
              parent_item = link.find_parent(class_=re.compile(r'gallery-item-container'))
              parent_text = parent_item.get_text(strip=True).lower() if parent_item else ""
 
@@ -99,13 +99,16 @@ try:
                  menu_links.append(link)
 
     if menu_links:
-        # Assume the first link found in the gallery structure is the latest menu post
-        relative_url = menu_links[0]['href']
-        latest_menu_post_url = urljoin(BASE_URL, relative_url)
-        print(f"Found potential menu post link using gallery structure: {latest_menu_post_url}")
+        # Use the href directly as it's absolute
+        latest_menu_post_url = menu_links[0]['href']
+        # Optional: Double-check it's a valid absolute URL starting with http
+        if not latest_menu_post_url.startswith(('http://', 'https://')):
+             print(f"Warning: Found link {latest_menu_post_url} does not look like an absolute URL. Attempting to join with base.")
+             latest_menu_post_url = urljoin(BASE_URL, latest_menu_post_url)
+
+        print(f"Found potential menu post link: {latest_menu_post_url}")
     else:
         print(f"Could not find any menu links matching the expected structure on {TARGET_PAGE_URL}")
-    # --- End New Selector Logic ---
 
 except requests.exceptions.RequestException as e:
     print(f"Error fetching news page {TARGET_PAGE_URL}: {e}")
@@ -114,12 +117,13 @@ except requests.exceptions.RequestException as e:
 if not latest_menu_post_url:
     print("Failed to find the menu post URL. Exiting.")
     exit(1)
-# --- End Updated Strategy ---
+# --- End Strategy ---
 
-# --- Proceed with the found URL (Keep as is) ---
+# --- Proceed with the found URL ---
 try:
     print(f"Fetching menu post page: {latest_menu_post_url}")
-    response = requests.get(latest_menu_post_url, headers=headers, timeout=REQUEST_TIMEOUT) # Pass headers here too
+    # Pass headers here too for consistency
+    response = requests.get(latest_menu_post_url, headers=headers, timeout=REQUEST_TIMEOUT)
     response.raise_for_status()
     print(f"Successfully fetched menu post page.")
 except requests.exceptions.RequestException as e:
@@ -129,11 +133,11 @@ except requests.exceptions.RequestException as e:
 # Parse the HTML content using BeautifulSoup
 soup = BeautifulSoup(response.content, 'html.parser')
 
-# --- Image Extraction Logic (Keep as is) ---
-# ... (Image extraction logic using data-pin-media and fallbacks) ...
+# --- Image Extraction Logic ---
 img_url = None
 img_alt_text = ""
 
+# ... (Keep the image extraction logic using data-pin-media and fallbacks as it was) ...
 img_tag_pin = soup.find('img', {'data-pin-media': True})
 if img_tag_pin and img_tag_pin.get('data-pin-media'):
     potential_url = urljoin(latest_menu_post_url, img_tag_pin['data-pin-media'])
@@ -178,7 +182,7 @@ if not img_url:
                      print(f"Found largest image in article, but alt text '{potential_alt}' doesn't suggest it's a menu.")
 # --- End Image Extraction Logic ---
 
-# --- Download and Process Image (Keep as is, including OCR check and disabled Telegram) ---
+# --- Download and Process Image ---
 if img_url:
     try:
         print(f"Downloading image from: {img_url}")
@@ -194,17 +198,17 @@ if img_url:
                 img_from_bytes = Image.open(BytesIO(image_content))
                 extracted_text = pytesseract.image_to_string(img_from_bytes).lower()
                 found_keywords = [keyword for keyword in OCR_MENU_KEYWORDS if keyword in extracted_text]
-                if len(found_keywords) > 1: # Require at least 2 keywords
+                if len(found_keywords) > 1:
                     is_confirmed_menu = True
                     print(f"OCR check passed. Found keywords: {found_keywords}")
                 else:
                     print(f"OCR check failed. Found keywords: {found_keywords}. Does not seem like a menu.")
             except Exception as ocr_error:
                 print(f"Error during OCR processing: {ocr_error}")
-                is_confirmed_menu = False # Treat OCR error as failure to confirm
+                is_confirmed_menu = False
         else:
             print("OCR libraries not available, skipping content check.")
-            is_confirmed_menu = True # Assume it's a menu if OCR is disabled
+            is_confirmed_menu = True
 
         # --- Hash Comparison and Notification ---
         if is_confirmed_menu:
@@ -218,6 +222,7 @@ if img_url:
                     img_file.write(image_content)
                 print(f"Image updated and saved as '{IMAGE_SAVE_PATH}'")
                 # --- Caption Generation ---
+                # ... (Caption generation logic) ...
                 caption_date_str = "this week"
                 try:
                     match = re.search(r'(\d{2}[-.]\d{2}[-.]\d{2,4})', latest_menu_post_url)
@@ -259,4 +264,4 @@ if img_url:
 
 else:
     print(f"Could not find menu image URL on the post page: {latest_menu_post_url}")
-    exit(1) # Exit if no image URL could be extracted
+    exit(1)
