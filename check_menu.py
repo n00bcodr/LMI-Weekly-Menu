@@ -19,7 +19,13 @@ TARGET_PAGE_URL = "https://www.ericssondining.ie/news"
 BASE_URL = "https://www.ericssondining.ie/"
 IMAGE_SAVE_PATH = "weekly_menu.jpg" # Save to the root of the repo
 REQUEST_TIMEOUT = 30 # Seconds for HTTP requests
-OCR_MENU_KEYWORDS = ["menu", "MON", "TUES", "WED", "THURS", "FRI", "soup", "WEEK", "HALAL", "€"]
+OCR_MENU_KEYWORDS = [
+    "menu", "week", "soup", "main", "salad", "daily", "special",
+    "mon", "tue", "tues", "wed", "thu", "thur", "thurs", "fri", # Abbreviations
+    "chicken", "beef", "pork", "fish", "vegetarian", "vegan", "halal",
+    "potatoes", "rice", "pasta", "noodles", "burger", "curry", "roast",
+    "kitchen", "€", "enrich" # Added words seen in the OCR output or image
+]
 # --- End Configuration ---
 
 # --- Helper Functions (Keep as they are) ---
@@ -203,7 +209,7 @@ if img_url:
                 print("--- End Debug: OCR Extracted Text ---\n")
                 # --- END ADDED ---
                 found_keywords = [keyword for keyword in OCR_MENU_KEYWORDS if keyword in extracted_text]
-                if len(found_keywords) > 1:
+                if len(found_keywords) > 2:
                     is_confirmed_menu = True
                     print(f"OCR check passed. Found keywords: {found_keywords}")
                 else:
