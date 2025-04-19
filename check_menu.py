@@ -19,7 +19,7 @@ TARGET_PAGE_URL = "https://www.ericssondining.ie/news"
 BASE_URL = "https://www.ericssondining.ie/"
 IMAGE_SAVE_PATH = "weekly_menu.jpg" # Save to the root of the repo
 REQUEST_TIMEOUT = 30 # Seconds for HTTP requests
-OCR_MENU_KEYWORDS = ["menu", "monday", "tuesday", "wednesday", "thursday", "friday", "soup", "main", "salad", "€"]
+OCR_MENU_KEYWORDS = ["menu", "MON", "TUES", "WED", "THURS", "FRI", "soup", "WEEK", "HALAL", "€"]
 # --- End Configuration ---
 
 # --- Helper Functions (Keep as they are) ---
@@ -197,6 +197,11 @@ if img_url:
             try:
                 img_from_bytes = Image.open(BytesIO(image_content))
                 extracted_text = pytesseract.image_to_string(img_from_bytes).lower()
+                # --- ADDED: Print the extracted text for debugging ---
+                print("\n--- Debug: OCR Extracted Text ---")
+                print(extracted_text)
+                print("--- End Debug: OCR Extracted Text ---\n")
+                # --- END ADDED ---
                 found_keywords = [keyword for keyword in OCR_MENU_KEYWORDS if keyword in extracted_text]
                 if len(found_keywords) > 1:
                     is_confirmed_menu = True
