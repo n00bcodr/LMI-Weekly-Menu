@@ -3,8 +3,8 @@ from bs4 import BeautifulSoup
 import os
 import hashlib
 import datetime
-import re
-from urllib.parse import urljoin
+import re # Import regex module
+from urllib.parse import urljoin # To construct absolute URLs
 from io import BytesIO # To handle image data in memory
 try:
     import pytesseract
@@ -22,8 +22,9 @@ REQUEST_TIMEOUT = 30 # Seconds for HTTP requests
 OCR_MENU_KEYWORDS = ["menu", "monday", "tuesday", "wednesday", "thursday", "friday", "soup", "main", "salad", "€"]
 # --- End Configuration ---
 
+# --- Helper Functions (Keep as they are) ---
 def calculate_hash(file_path):
-    """Calculate the SHA-256 hash of the given file."""
+    # ... (calculate_hash function code) ...
     sha256 = hashlib.sha256()
     try:
         with open(file_path, 'rb') as f:
@@ -34,7 +35,7 @@ def calculate_hash(file_path):
         return None
 
 def send_telegram_photo(photo_path, caption):
-    """Send a photo to a Telegram chat."""
+    # ... (send_telegram_photo function code - currently commented out at the end) ...
     bot_token = os.getenv('BOT_TOKEN')
     chat_id = os.getenv('CHAT_ID')
     if not bot_token or not chat_id:
@@ -45,7 +46,7 @@ def send_telegram_photo(photo_path, caption):
         with open(photo_path, 'rb') as photo:
             files = {'photo': photo}
             data = {'chat_id': chat_id, 'caption': caption}
-            response_tg = requests.post(url, files=files, data=data, timeout=REQUEST_TIMEOUT + 30) # Longer timeout for upload
+            response_tg = requests.post(url, files=files, data=data, timeout=REQUEST_TIMEOUT + 30)
             response_tg.raise_for_status()
         print("Photo sent successfully.")
         return True
@@ -57,82 +58,93 @@ def send_telegram_photo(photo_path, caption):
         return False
 
 def get_current_monday(date):
-    """Get the Monday of the week in which the given date falls."""
-    return date - datetime.timedelta(days=date.weekday())
+    # ... (get_current_monday function code) ...
+     return date - datetime.timedelta(days=date.weekday())
+# --- End Helper Functions ---
 
-# --- Strategy: Find menu link on the /news page ---
+# --- Updated Strategy: Find menu link on the /news page ---
 latest_menu_post_url = None
 try:
     print(f"Fetching news page: {TARGET_PAGE_URL}")
-    headers = {
+    headers = { # Keep the User-Agent header
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
     }
-    news_page_response = requests.get(TARGET_PAGE_URL, timeout=REQUEST_TIMEOUT)
+    news_page_response = requests.get(TARGET_PAGE_URL, headers=headers, timeout=REQUEST_TIMEOUT)
     news_page_response.raise_for_status()
     news_page_soup = BeautifulSoup(news_page_response.content, 'html.parser')
 
-    # Find links containing '/post/' and 'menu' (case-insensitive) in text or href
-    menu_links = news_page_soup.find_all(
-        lambda tag: tag.name == 'a' and \
-                    tag.get('href', '').startswith('/post/') and \
-                    ('menu' in tag.get_text(strip=True).lower() or \
-                     'menu' in tag.get('href', '').lower())
-    )
+    # --- New Selector Logic for Pro Gallery ---
+    # Find the main gallery container first
+    # The ID 'pro-gallery-pro-blog' seems specific to this implementation
+    gallery_container = news_page_soup.find('div', {'id': 'pro-gallery-pro-blog'})
+    menu_links = []
+    if gallery_container:
+        # Find all links within gallery item wrappers that point to a post
+        # This looks for links within the typical structure found in news_page.html
+        potential_links = gallery_container.find_all(
+            'a',
+            href=re.compile(r'^/post/') # Regex: href starts with /post/
+        )
+
+        # Further filter these links to ensure they are likely menu posts
+        for link in potential_links:
+             # Check if 'menu' is in the link text OR in the href itself
+             link_text = link.get_text(strip=True).lower()
+             href_text = link.get('href', '').lower()
+             # Check within parent structure as well, sometimes the text is outside the <a> but inside the item container
+             parent_item = link.find_parent(class_=re.compile(r'gallery-item-container'))
+             parent_text = parent_item.get_text(strip=True).lower() if parent_item else ""
+
+             if 'menu' in link_text or 'menu' in href_text or 'menu' in parent_text:
+                 menu_links.append(link)
 
     if menu_links:
+        # Assume the first link found in the gallery structure is the latest menu post
         relative_url = menu_links[0]['href']
         latest_menu_post_url = urljoin(BASE_URL, relative_url)
-        print(f"Found potential menu post link: {latest_menu_post_url}")
+        print(f"Found potential menu post link using gallery structure: {latest_menu_post_url}")
     else:
-        print(f"Could not find any menu links matching '/post/' and 'menu' on {TARGET_PAGE_URL}")
+        print(f"Could not find any menu links matching the expected structure on {TARGET_PAGE_URL}")
+    # --- End New Selector Logic ---
 
 except requests.exceptions.RequestException as e:
     print(f"Error fetching news page {TARGET_PAGE_URL}: {e}")
-    exit(1) # Exit if fetching the news page fails
+    exit(1)
 
 if not latest_menu_post_url:
     print("Failed to find the menu post URL. Exiting.")
-    exit(1) # Exit if no link was found
-# --- End Strategy ---
+    exit(1)
+# --- End Updated Strategy ---
 
-# --- Proceed with the found URL ---
-# <<< This block was missing in the code you provided >>>
+# --- Proceed with the found URL (Keep as is) ---
 try:
     print(f"Fetching menu post page: {latest_menu_post_url}")
-    # Fetch the specific post page and assign to 'response'
-    response = requests.get(latest_menu_post_url, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status() # Check if the fetch was successful
+    response = requests.get(latest_menu_post_url, headers=headers, timeout=REQUEST_TIMEOUT) # Pass headers here too
+    response.raise_for_status()
     print(f"Successfully fetched menu post page.")
-
 except requests.exceptions.RequestException as e:
-    # If requests.get() fails, print error and exit
     print(f"Failed to fetch menu post page {latest_menu_post_url}: {e}")
-    exit(1) # Exit here if fetching fails
-# <<< End of missing block >>>
+    exit(1)
 
-# Now 'response' should be defined before this line is reached
 # Parse the HTML content using BeautifulSoup
 soup = BeautifulSoup(response.content, 'html.parser')
 
-# --- Image Extraction Logic ---
+# --- Image Extraction Logic (Keep as is) ---
+# ... (Image extraction logic using data-pin-media and fallbacks) ...
 img_url = None
-img_alt_text = "" # Initialize variable for alt text
+img_alt_text = ""
 
-# Try finding the image tag with the specific 'data-pin-media' attribute first
 img_tag_pin = soup.find('img', {'data-pin-media': True})
 if img_tag_pin and img_tag_pin.get('data-pin-media'):
     potential_url = urljoin(latest_menu_post_url, img_tag_pin['data-pin-media'])
-    potential_alt = img_tag_pin.get('alt', '').lower() # Get alt text
-    # Optional check for keywords in alt text
-    if "menu" in potential_alt or not potential_alt: # Accept if "menu" is in alt, or if alt is empty/missing
+    potential_alt = img_tag_pin.get('alt', '').lower()
+    if "menu" in potential_alt or not potential_alt:
         img_url = potential_url
         img_alt_text = potential_alt
         print(f"Found image URL using 'data-pin-media': {img_url}")
     else:
         print(f"Found image with 'data-pin-media', but alt text '{potential_alt}' doesn't suggest it's a menu. Continuing search.")
 
-
-# Fallback 1: Look for specific Wix Blog post image structures
 if not img_url:
     print("Attribute 'data-pin-media' not found or alt text unsuitable. Trying Wix Blog image selector.")
     figure_tag = soup.find(['figure', 'div'], attrs={'role': 'figure'})
@@ -140,7 +152,7 @@ if not img_url:
         main_img = figure_tag.find('img', {'src': True})
         if main_img:
             potential_url = urljoin(latest_menu_post_url, main_img['src'])
-            potential_alt = main_img.get('alt', '').lower() # Get alt text
+            potential_alt = main_img.get('alt', '').lower()
             if "menu" in potential_alt or not potential_alt:
                  img_url = potential_url
                  img_alt_text = potential_alt
@@ -148,8 +160,6 @@ if not img_url:
             else:
                  print(f"Found image with Wix figure structure, but alt text '{potential_alt}' doesn't suggest it's a menu. Continuing search.")
 
-
-# Fallback 2: Generic search within <article> (less reliable)
 if not img_url:
     print("Wix Blog selector failed or alt text unsuitable. Trying generic article image search.")
     article_body = soup.find('article')
@@ -159,7 +169,7 @@ if not img_url:
            main_img = max(all_imgs, key=lambda img: int(img.get('width', 0)) * int(img.get('height', 0)), default=None)
            if main_img:
                 potential_url = urljoin(latest_menu_post_url, main_img['src'])
-                potential_alt = main_img.get('alt', '').lower() # Get alt text
+                potential_alt = main_img.get('alt', '').lower()
                 if "menu" in potential_alt or not potential_alt:
                     img_url = potential_url
                     img_alt_text = potential_alt
@@ -168,13 +178,11 @@ if not img_url:
                      print(f"Found largest image in article, but alt text '{potential_alt}' doesn't suggest it's a menu.")
 # --- End Image Extraction Logic ---
 
-
-# --- Download and Process Image ---
+# --- Download and Process Image (Keep as is, including OCR check and disabled Telegram) ---
 if img_url:
     try:
-        # Download the image
         print(f"Downloading image from: {img_url}")
-        img_response = requests.get(img_url, timeout=60) # Longer timeout for image download
+        img_response = requests.get(img_url, headers=headers, timeout=60) # Pass headers here too
         img_response.raise_for_status()
         image_content = img_response.content
 
@@ -186,7 +194,6 @@ if img_url:
                 img_from_bytes = Image.open(BytesIO(image_content))
                 extracted_text = pytesseract.image_to_string(img_from_bytes).lower()
                 found_keywords = [keyword for keyword in OCR_MENU_KEYWORDS if keyword in extracted_text]
-
                 if len(found_keywords) > 1: # Require at least 2 keywords
                     is_confirmed_menu = True
                     print(f"OCR check passed. Found keywords: {found_keywords}")
@@ -203,15 +210,13 @@ if img_url:
         if is_confirmed_menu:
             existing_hash = calculate_hash(IMAGE_SAVE_PATH)
             new_hash = hashlib.sha256(image_content).hexdigest()
-
             if existing_hash == new_hash:
                 print("The new image is the same as the existing one (and confirmed as menu if OCR ran). No update needed.")
             else:
-                print("The new image is different (and confirmed as menu if OCR ran). Updating.") # Removed mention of sending notification
+                print("The new image is different (and confirmed as menu if OCR ran). Updating.")
                 with open(IMAGE_SAVE_PATH, 'wb') as img_file:
                     img_file.write(image_content)
                 print(f"Image updated and saved as '{IMAGE_SAVE_PATH}'")
-
                 # --- Caption Generation ---
                 caption_date_str = "this week"
                 try:
@@ -239,17 +244,13 @@ if img_url:
                      today = datetime.date.today()
                      current_monday = get_current_monday(today)
                      caption_date_str = f"week starting {current_monday.strftime('%d %b %Y')}"
-                # --- End Caption Generation ---
-
                 caption = f"Ericsson Dining Menu - {caption_date_str}\nSource: {latest_menu_post_url}"
-
                 # --- Temporarily disable Telegram sending for testing ---
                 print("Skipping Telegram notification for testing.")
-                # print(f"Caption that would be sent: {caption}") # Optional: print caption for checking
                 # send_telegram_photo(IMAGE_SAVE_PATH, caption) # Keep this commented out
                 # --- End temporary disable ---
         else:
-             print("Image content check failed (via OCR). Skipping hash comparison.") # Removed mention of notification
+             print("Image content check failed (via OCR). Skipping hash comparison.")
 
     except requests.exceptions.RequestException as e:
         print(f"Error downloading image {img_url}: {e}")
