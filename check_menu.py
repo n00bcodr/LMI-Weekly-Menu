@@ -202,14 +202,28 @@ if img_url:
             print("Performing OCR check on the downloaded image...")
             try:
                 img_from_bytes = Image.open(BytesIO(image_content))
-                extracted_text = pytesseract.image_to_string(img_from_bytes).lower()
+                # --- Optional Pre-processing: Convert to grayscale ---
+                img_gray = img_from_bytes.convert('L')
+                # --- End Optional Pre-processing ---
+
+                # --- Tesseract Configuration: Try PSM mode 6 ---
+                # PSM modes guide Tesseract's layout analysis:
+                # 3 = Fully automatic page segmentation (default)
+                # 6 = Assume a single uniform block of text.
+                # 11 = Sparse text. Find as much text as possible in no particular order.
+                # Add more options as needed: e.g., config='--psm 6 --oem 3'
+                custom_config = r'--psm 6'
+                # --- End Tesseract Configuration ---
+
+                # Use the pre-processed image (img_gray) and custom config
+                extracted_text = pytesseract.image_to_string(img_gray, config=custom_config).lower()
                 # --- ADDED: Print the extracted text for debugging ---
                 print("\n--- Debug: OCR Extracted Text ---")
                 print(extracted_text)
                 print("--- End Debug: OCR Extracted Text ---\n")
                 # --- END ADDED ---
                 found_keywords = [keyword for keyword in OCR_MENU_KEYWORDS if keyword in extracted_text]
-                if len(found_keywords) > 2:
+                if len(found_keywords) > 3:
                     is_confirmed_menu = True
                     print(f"OCR check passed. Found keywords: {found_keywords}")
                 else:
