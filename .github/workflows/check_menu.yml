@@ -9,7 +9,6 @@ on:
     - cron: "0 8 * * 2"   # Tuesday at 8 AM UTC, edgecase if Monday is a bank holiday
   workflow_dispatch:      # Allows manual triggering
 
-# Add permissions for the job to commit back to the repository
 permissions:
   contents: write
 
@@ -19,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4.1.7 # Pinned to your previous version, consider updating to v4 if desired
+        uses: actions/checkout@v4.1.7
 
       # Add step to install Tesseract OCR
       - name: Install Tesseract OCR
@@ -31,9 +30,9 @@ jobs:
         shell: bash
 
       - name: Set up Python
-        uses: actions/setup-python@v5.1.1 # Pinned to your previous version, consider updating to v5 if desired
+        uses: actions/setup-python@v5.1.1
         with:
-          python-version: '3.x' # Or your specific version e.g., '3.11'
+          python-version: '3.x'
 
       - name: Install dependencies
         run: |
@@ -43,10 +42,9 @@ jobs:
         shell: bash
 
       - name: Run script
-        # No env needed here as Telegram is disabled for testing
-        # env:
-        #   BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-        #   CHAT_ID: ${{ secrets.CHAT_ID }}
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           python check_menu.py
         shell: bash
