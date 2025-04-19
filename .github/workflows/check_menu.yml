@@ -48,7 +48,7 @@ jobs:
         #   BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         #   CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
-          python check_menu.py # Use your script filename
+          python check_menu.py
         shell: bash
 
       - name: Calculate Monday's Date
