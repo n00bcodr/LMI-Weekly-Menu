@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4.1.7
+        uses: actions/checkout@main
 
       # Add step to install Tesseract OCR
       - name: Install Tesseract OCR
@@ -56,22 +56,22 @@ jobs:
         shell: bash
 
       - name: Commit files
+        id: commit_files
         run: |
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
-          git add weekly_menu.jpg # Or the path where your script saves the image
-          # Check if there are staged changes before committing
+          git add weekly_menu.jpg
           if git diff --cached --quiet; then
             echo "No changes to commit."
-            exit 0 # Exit successfully if no changes
+            exit 0
           fi
           # If changes exist, commit them
-          git commit -m "📜Update weekly menu for week starting ${{ env.MONDAY_DATE }} 😋 [ci]"
+          git commit -m "📜Update weekly menu for week starting ${{ env.MONDAY_DATE }} 😋 [skip ci]"
         shell: bash
 
       - name: Push changes
         # Only run push if a commit was actually made
-        if: steps.Commit_files.outcome == 'success' # Check the outcome of the previous step
+        if: steps.commit_files.outcome == 'success' # Check the outcome of the previous step
         uses: ad-m/github-push-action@v0.8.0
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

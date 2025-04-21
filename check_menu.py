@@ -205,35 +205,26 @@ if img_url:
                     img_file.write(image_content)
                 print(f"Image updated and saved as '{IMAGE_SAVE_PATH}'")
                 # --- Caption Generation ---
-                caption_date_str = "this week"
                 try:
-                    match = re.search(r'(\d{2}[-.]\d{2}[-.]\d{2,4})', latest_menu_post_url)
-                    if match:
-                        date_part = match.group(1).replace('.', '-')
-                        parsed_date = None
-                        for fmt in ('%d-%m-%y', '%d-%m-%Y'):
-                            try:
-                                parsed_date = datetime.datetime.strptime(date_part, fmt).date()
-                                break
-                            except ValueError:
-                                continue
-                        if parsed_date:
-                             menu_monday = get_current_monday(parsed_date)
-                             caption_date_str = f"week starting {menu_monday.strftime('%d %b %Y')}"
-                        else:
-                             print(f"Could not parse date '{date_part}' from URL {latest_menu_post_url}.")
-                    else:
-                         today = datetime.date.today()
-                         current_monday = get_current_monday(today)
-                         caption_date_str = f"week starting {current_monday.strftime('%d %b %Y')}"
+                    # Get the current date when the script runs
+                    today = datetime.date.today()
+                    # Calculate the Monday of the current week
+                    current_monday = get_current_monday(today)
+                    # Format the date string
+                    caption_date_str = f"week starting {current_monday.strftime('%d %b %Y')}"
                 except Exception as e:
-                     print(f"Error parsing date for caption: {e}")
-                     today = datetime.date.today()
-                     current_monday = get_current_monday(today)
-                     caption_date_str = f"week starting {current_monday.strftime('%d %b %Y')}"
-                caption = f"Ericsson Dining Menu - {caption_date_str}\nSource: {latest_menu_post_url}"
+                     # Fallback in case of unexpected error during date calculation
+                     print(f"Error generating caption date: {e}")
+                     caption_date_str = "current week" # Generic fallback
+                # --- End Caption Generation ---
+
+                caption = f"Menu of the week starting {caption_date_str}\nSource: {latest_menu_post_url}"
+                print(f"{caption}")
+                # --- Telegram Sending ---
+                # Make sure this is uncommented if you want notifications
                 print("Attempting to send notification to Telegram...")
                 send_telegram_photo(IMAGE_SAVE_PATH, caption)
+                # --- End Telegram Sending ---
         else:
              print("Image content check failed (via OCR). Skipping hash comparison and notification.")
 
