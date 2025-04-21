@@ -204,6 +204,7 @@ if img_url:
                 with open(IMAGE_SAVE_PATH, 'wb') as img_file:
                     img_file.write(image_content)
                 print(f"Image updated and saved as '{IMAGE_SAVE_PATH}'")
+
                 # --- Caption Generation ---
                 try:
                     # Get the current date when the script runs
@@ -211,20 +212,22 @@ if img_url:
                     # Calculate the Monday of the current week
                     current_monday = get_current_monday(today)
                     # Format the date string
-                    caption_date_str = f"week starting {current_monday.strftime('%d %b %Y')}"
+                    caption_date_str = f"{current_monday.strftime('%d %b %Y')}"
+
                 except Exception as e:
                      # Fallback in case of unexpected error during date calculation
                      print(f"Error generating caption date: {e}")
-                     caption_date_str = "current week" # Generic fallback
+                     caption_date_str = "current week"
                 # --- End Caption Generation ---
 
                 caption = f"Menu of the week starting {caption_date_str}\nSource: {latest_menu_post_url}"
+                # Print the caption to console
                 print(f"{caption}")
-                # --- Telegram Sending ---
-                # Make sure this is uncommented if you want notifications
-                print("Attempting to send notification to Telegram...")
+
+                # --- Telegram ---
+                print("Sending a notification through telegram...")
                 send_telegram_photo(IMAGE_SAVE_PATH, caption)
-                # --- End Telegram Sending ---
+                # --- End Telegram ---
         else:
              print("Image content check failed (via OCR). Skipping hash comparison and notification.")
 
