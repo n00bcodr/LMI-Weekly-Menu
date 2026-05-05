@@ -3,22 +3,27 @@ from bs4 import BeautifulSoup
 import os
 import hashlib
 import datetime
-import re # Import regex module
-from urllib.parse import urljoin # To construct absolute URLs
-from io import BytesIO # To handle image data in memory
+import re
+from urllib.parse import urljoin
+from io import BytesIO
+
 try:
     import pytesseract
-    from PIL import Image # Python Imaging Library
+    from PIL import Image
     OCR_ENABLED = True
 except ImportError:
     print("OCR libraries (pytesseract, Pillow) not found. OCR check will be skipped.")
     OCR_ENABLED = False
 
 # --- Configuration ---
-TARGET_PAGE_URL = "https://www.ericssondining.ie/news"
-BASE_URL = "https://www.ericssondining.ie/"
+BASE_URL = "https://www.ericssondining.ie"
+NEWS_PAGE_URL = f"{BASE_URL}/news"
 IMAGE_SAVE_PATH = "weekly_menu.jpg"
 REQUEST_TIMEOUT = 30
+
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+}
 
 # Expanded Keyword List (lowercase)
 OCR_MENU_KEYWORDS = [
@@ -29,6 +34,7 @@ OCR_MENU_KEYWORDS = [
     "kitchen", "mash", "enrich"
 ]
 # --- End Configuration ---
+
 
 # --- Helper Functions ---
 def calculate_hash(file_path):
@@ -42,200 +48,324 @@ def calculate_hash(file_path):
     except FileNotFoundError:
         return None
 
+
 def send_telegram_photo(photo_path, caption):
     """Send a photo to a Telegram chat."""
     bot_token = os.getenv('BOT_TOKEN')
     chat_id = os.getenv('CHAT_ID')
     if not bot_token or not chat_id:
         print("Error: BOT_TOKEN or CHAT_ID environment variables not set.")
-        # Optionally add more error handling here if needed in production
         return False
     url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
     try:
         with open(photo_path, 'rb') as photo:
             files = {'photo': photo}
             data = {'chat_id': chat_id, 'caption': caption}
-            response_tg = requests.post(url, files=files, data=data, timeout=REQUEST_TIMEOUT + 30) # Longer timeout for upload
-            response_tg.raise_for_status() # Check for HTTP errors
+            response_tg = requests.post(url, files=files, data=data, timeout=REQUEST_TIMEOUT + 30)
+            response_tg.raise_for_status()
         print("Photo sent successfully to Telegram.")
         return True
     except requests.exceptions.RequestException as e:
         print(f"Failed to send photo to Telegram: {e}")
-        # Consider logging response_tg.text if available and status_code != 200
         return False
     except FileNotFoundError:
         print(f"Error: Photo file not found at {photo_path} for Telegram.")
         return False
 
+
 def get_current_monday(date):
     """Get the Monday of the week in which the given date falls."""
     return date - datetime.timedelta(days=date.weekday())
-# --- End Helper Functions ---
 
-# --- Find menu link on the /news page ---
-latest_menu_post_url = None
-try:
-    print(f"Fetching news page: {TARGET_PAGE_URL}")
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-    }
-    news_page_response = requests.get(TARGET_PAGE_URL, headers=headers, timeout=REQUEST_TIMEOUT)
-    news_page_response.raise_for_status()
-    news_page_soup = BeautifulSoup(news_page_response.content, 'html.parser')
 
-    gallery_container = news_page_soup.find('div', {'id': 'pro-gallery-pro-blog'})
-    if not gallery_container:
-         gallery_container = news_page_soup.find('div', {'data-hook': 'gallery-widget-items-container'}) or \
-                             news_page_soup.find('div', class_=re.compile(r'pro-gallery'))
+def construct_menu_url(monday_date):
+    """
+    Construct the expected menu post URL based on the Monday date.
+    Pattern: /post/menu-DD-MM-YY
+    """
+    slug = monday_date.strftime("menu-%d-%m-%y")
+    return f"{BASE_URL}/post/{slug}"
 
-    menu_links = []
-    if gallery_container:
-        potential_links = gallery_container.find_all('a', href=re.compile(r'/post/'))
-        for link in potential_links:
-             h2_text = link.find('h2')
-             link_text = (h2_text.get_text(strip=True) if h2_text else link.get_text(strip=True)).lower()
-             href_text = link.get('href', '').lower()
-             parent_item = link.find_parent(class_=re.compile(r'gallery-item-container'))
-             parent_text = parent_item.get_text(strip=True).lower() if parent_item else ""
-             if 'menu' in link_text or 'menu' in href_text or 'menu' in parent_text:
-                 menu_links.append(link)
 
-    if menu_links:
-        latest_menu_post_url = menu_links[0]['href']
-        if not latest_menu_post_url.startswith(('http://', 'https://')):
-             latest_menu_post_url = urljoin(BASE_URL, latest_menu_post_url)
-        print(f"Found potential menu post link: {latest_menu_post_url}")
-    else:
-        print(f"Could not find any menu links matching the expected structure on {TARGET_PAGE_URL}")
-        exit(1) # Exit if no link found
+def try_url(url):
+    """Check if a URL returns a valid page (HTTP 200)."""
+    try:
+        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+        if resp.status_code == 200:
+            return resp
+        else:
+            print(f"  URL returned status {resp.status_code}: {url}")
+            return None
+    except requests.exceptions.RequestException as e:
+        print(f"  Error fetching {url}: {e}")
+        return None
 
-except requests.exceptions.RequestException as e:
-    print(f"Error fetching news page {TARGET_PAGE_URL}: {e}")
-    exit(1)
 
-if not latest_menu_post_url:
-    print("Failed to find the menu post URL. Exiting.")
-    exit(1)
-# --- End Strategy ---
+def find_menu_post_url():
+    """
+    Strategy 1: Construct the URL directly from the date pattern.
+    Try current week's Monday, then previous Monday (in case it's posted late).
 
-# --- Proceed with the found URL ---
-try:
-    print(f"Fetching menu post page: {latest_menu_post_url}")
-    response = requests.get(latest_menu_post_url, headers=headers, timeout=REQUEST_TIMEOUT)
-    response.raise_for_status()
-    print(f"Successfully fetched menu post page.")
-except requests.exceptions.RequestException as e:
-    print(f"Failed to fetch menu post page {latest_menu_post_url}: {e}")
-    exit(1)
+    Strategy 2: Fallback - fetch the news page and look for menu links in the
+    rendered HTML (works if Wix pre-renders or if the site structure changes).
 
-# Parse the HTML content using BeautifulSoup
-soup = BeautifulSoup(response.content, 'html.parser')
+    Strategy 3: Use Wix's internal blog API to list posts.
+    """
+    today = datetime.date.today()
+    current_monday = get_current_monday(today)
+    previous_monday = current_monday - datetime.timedelta(days=7)
 
-# --- Image Extraction Logic ---
-img_url = None
-# (Keep the image extraction logic using data-pin-media and fallbacks)
-img_tag_pin = soup.find('img', {'data-pin-media': True})
-if img_tag_pin and img_tag_pin.get('data-pin-media'):
-    img_url = urljoin(latest_menu_post_url, img_tag_pin['data-pin-media'])
-    print(f"Found image URL using 'data-pin-media': {img_url}")
+    # Strategy 1: Direct URL construction
+    print("Strategy 1: Constructing menu URL from date pattern...")
+    for monday in [current_monday, previous_monday]:
+        url = construct_menu_url(monday)
+        print(f"  Trying: {url}")
+        resp = try_url(url)
+        if resp:
+            print(f"  Found valid menu page: {url}")
+            return url, resp
 
-if not img_url:
-    print("Attribute 'data-pin-media' not found. Trying Wix Blog image selector.")
+    # Strategy 2: Try Wix blog feed/sitemap for post discovery
+    print("\nStrategy 2: Checking Wix blog sitemap/feed...")
+    sitemap_urls = [
+        f"{BASE_URL}/sitemap.xml",
+        f"{BASE_URL}/blog-sitemap.xml",
+        f"{BASE_URL}/post-sitemap.xml",
+    ]
+    for sitemap_url in sitemap_urls:
+        try:
+            resp = requests.get(sitemap_url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+            if resp.status_code == 200 and 'menu' in resp.text.lower():
+                # Parse sitemap XML for menu post URLs
+                menu_urls = re.findall(r'<loc>(https?://[^<]*?/post/menu[^<]*?)</loc>', resp.text, re.IGNORECASE)
+                if menu_urls:
+                    # Sort by URL (which contains date) and take the latest
+                    menu_urls.sort(reverse=True)
+                    latest_url = menu_urls[0]
+                    print(f"  Found menu URL in sitemap: {latest_url}")
+                    resp = try_url(latest_url)
+                    if resp:
+                        return latest_url, resp
+        except requests.exceptions.RequestException:
+            continue
+
+    # Strategy 3: Scrape the news page HTML (may work if Wix SSR is enabled)
+    print("\nStrategy 3: Scraping news page for menu links...")
+    try:
+        news_resp = requests.get(NEWS_PAGE_URL, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        news_resp.raise_for_status()
+        news_soup = BeautifulSoup(news_resp.content, 'html.parser')
+
+        # Look for any link containing '/post/menu' in href
+        all_links = news_soup.find_all('a', href=re.compile(r'/post/menu', re.IGNORECASE))
+        if all_links:
+            href = all_links[0].get('href', '')
+            if not href.startswith(('http://', 'https://')):
+                href = urljoin(BASE_URL, href)
+            print(f"  Found menu link on news page: {href}")
+            resp = try_url(href)
+            if resp:
+                return href, resp
+
+        # Broader search: any link with '/post/' that mentions 'menu' in text or href
+        all_post_links = news_soup.find_all('a', href=re.compile(r'/post/'))
+        for link in all_post_links:
+            href = link.get('href', '').lower()
+            text = link.get_text(strip=True).lower()
+            if 'menu' in href or 'menu' in text:
+                full_url = link.get('href', '')
+                if not full_url.startswith(('http://', 'https://')):
+                    full_url = urljoin(BASE_URL, full_url)
+                print(f"  Found menu link on news page: {full_url}")
+                resp = try_url(full_url)
+                if resp:
+                    return full_url, resp
+
+        # Check for JSON data embedded in the page (Wix often embeds blog data)
+        scripts = news_soup.find_all('script', type='application/json')
+        for script in scripts:
+            if script.string and '/post/menu' in script.string.lower():
+                urls_in_json = re.findall(r'/post/menu[^"\'\\<>\s]*', script.string, re.IGNORECASE)
+                if urls_in_json:
+                    # Take the first (likely most recent)
+                    candidate = urljoin(BASE_URL, urls_in_json[0])
+                    print(f"  Found menu URL in embedded JSON: {candidate}")
+                    resp = try_url(candidate)
+                    if resp:
+                        return candidate, resp
+
+    except requests.exceptions.RequestException as e:
+        print(f"  Error fetching news page: {e}")
+
+    return None, None
+
+
+def extract_image_url(soup, page_url):
+    """Extract the menu image URL from the post page."""
+    img_url = None
+
+    # Method 1: data-pin-media attribute (Pinterest-style sharing)
+    img_tag_pin = soup.find('img', {'data-pin-media': True})
+    if img_tag_pin and img_tag_pin.get('data-pin-media'):
+        img_url = urljoin(page_url, img_tag_pin['data-pin-media'])
+        print(f"Found image URL using 'data-pin-media': {img_url}")
+        return img_url
+
+    # Method 2: Wix image in a figure/role=figure container
     figure_tag = soup.find(['figure', 'div'], attrs={'role': 'figure'})
     if figure_tag:
         main_img = figure_tag.find('img', {'src': True})
         if main_img:
-            img_url = urljoin(latest_menu_post_url, main_img['src'])
-            print(f"Found image URL using Wix Blog figure structure: {img_url}")
+            img_url = urljoin(page_url, main_img['src'])
+            print(f"Found image URL using figure structure: {img_url}")
+            return img_url
 
-if not img_url:
-    print("Wix Blog selector failed. Trying generic article image search.")
-    article_body = soup.find('article')
-    if article_body:
-        all_imgs = article_body.find_all('img', {'src': True})
-        if all_imgs:
-           main_img = max(all_imgs, key=lambda img: int(img.get('width', 0)) * int(img.get('height', 0)), default=None)
-           if main_img:
-                img_url = urljoin(latest_menu_post_url, main_img['src'])
-                print(f"Found image URL using largest image in article (fallback): {img_url}")
-# --- End Image Extraction Logic ---
+    # Method 3: Wix image component (data-hook="imageViewer")
+    wix_img = soup.find('img', {'data-hook': re.compile(r'image')})
+    if wix_img and wix_img.get('src'):
+        img_url = urljoin(page_url, wix_img['src'])
+        print(f"Found image URL using Wix imageViewer: {img_url}")
+        return img_url
 
-# --- Download and Process Image ---
-if img_url:
+    # Method 4: Look for high-res Wix static media URLs in page source
+    page_text = str(soup)
+    wix_media_urls = re.findall(
+        r'(https://static\.wixstatic\.com/media/[a-f0-9]+~mv2\.[a-z]+(?:/v1/fill/[^"\'<>\s]+)?)',
+        page_text
+    )
+    if wix_media_urls:
+        # Pick the largest (longest URL usually has fill params for full size)
+        best = max(wix_media_urls, key=len)
+        print(f"Found image URL from Wix static media pattern: {best}")
+        return best
+
+    # Method 5: Largest image in article body
+    article_body = soup.find('article') or soup.find('div', {'data-hook': 'blog-post-body'}) or soup
+    all_imgs = article_body.find_all('img', {'src': True})
+    if all_imgs:
+        # Filter out tiny images (icons, avatars)
+        def img_size(img):
+            try:
+                return int(img.get('width', 0)) * int(img.get('height', 0))
+            except (ValueError, TypeError):
+                return 0
+        main_img = max(all_imgs, key=img_size, default=None)
+        if main_img:
+            img_url = urljoin(page_url, main_img['src'])
+            print(f"Found image URL using largest image fallback: {img_url}")
+            return img_url
+
+    # Method 6: og:image meta tag
+    og_img = soup.find('meta', property='og:image')
+    if og_img and og_img.get('content'):
+        img_url = og_img['content']
+        print(f"Found image URL from og:image meta tag: {img_url}")
+        return img_url
+
+    return None
+
+
+def perform_ocr_check(image_content):
+    """Run OCR on image and check for menu keywords."""
+    if not OCR_ENABLED:
+        print("OCR libraries not available, skipping content check.")
+        return True  # Assume menu if OCR disabled
+
+    print("Performing OCR check on the downloaded image...")
     try:
-        print(f"Downloading image from: {img_url}")
-        img_response = requests.get(img_url, headers=headers, timeout=60)
+        img_from_bytes = Image.open(BytesIO(image_content))
+        img_gray = img_from_bytes.convert('L')
+        custom_config = r'--psm 6'
+        extracted_text = pytesseract.image_to_string(img_gray, config=custom_config).lower()
+        print(f"Extracted text (first 200 chars): {extracted_text[:200]}...")
+
+        found_keywords = [kw for kw in OCR_MENU_KEYWORDS if kw in extracted_text]
+        if len(found_keywords) > 4:
+            print(f"OCR check passed. Found {len(found_keywords)} keywords: {found_keywords}")
+            return True
+        else:
+            print(f"OCR check failed. Only found {len(found_keywords)} keywords: {found_keywords}. Does not seem like a menu.")
+            return False
+    except Exception as ocr_error:
+        print(f"Error during OCR processing: {ocr_error}")
+        return False
+
+
+# --- Main Execution ---
+def main():
+    print(f"{'='*60}")
+    print(f"Menu Checker - {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"{'='*60}\n")
+
+    # Step 1: Find the menu post URL
+    menu_post_url, page_response = find_menu_post_url()
+
+    if not menu_post_url:
+        print("\nFailed to find the menu post URL using all strategies. Exiting.")
+        exit(1)
+
+    print(f"\nUsing menu post URL: {menu_post_url}")
+
+    # Step 2: Parse the page and extract image
+    if page_response:
+        soup = BeautifulSoup(page_response.content, 'html.parser')
+    else:
+        try:
+            response = requests.get(menu_post_url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+            response.raise_for_status()
+            soup = BeautifulSoup(response.content, 'html.parser')
+        except requests.exceptions.RequestException as e:
+            print(f"Failed to fetch menu post page: {e}")
+            exit(1)
+
+    img_url = extract_image_url(soup, menu_post_url)
+
+    if not img_url:
+        print(f"\nCould not find menu image URL on the post page: {menu_post_url}")
+        exit(1)
+
+    # Step 3: Download the image
+    try:
+        print(f"\nDownloading image from: {img_url}")
+        img_response = requests.get(img_url, headers=HEADERS, timeout=60)
         img_response.raise_for_status()
         image_content = img_response.content
-
-        # --- OCR Check ---
-        is_confirmed_menu = False
-        if OCR_ENABLED:
-            print("Performing OCR check on the downloaded image...")
-            try:
-                img_from_bytes = Image.open(BytesIO(image_content))
-                img_gray = img_from_bytes.convert('L') # Use grayscale
-                custom_config = r'--psm 6' # Use PSM 6
-                extracted_text = pytesseract.image_to_string(img_gray, config=custom_config).lower()
-                print(f"Extracted text: {extracted_text}")
-                # Check for keywords in the extracted text
-                found_keywords = [keyword for keyword in OCR_MENU_KEYWORDS if keyword in extracted_text]
-                # Require at least 4 keywords
-                if len(found_keywords) > 4:
-                    is_confirmed_menu = True
-                    print(f"OCR check passed. Found keywords: {found_keywords}")
-                else:
-                    print(f"OCR check failed. Found keywords: {found_keywords}. Does not seem like a menu.")
-            except Exception as ocr_error:
-                print(f"Error during OCR processing: {ocr_error}")
-                is_confirmed_menu = False # Treat OCR error as failure
-        else:
-            print("OCR libraries not available, skipping content check.")
-            is_confirmed_menu = True # Assume menu if OCR disabled
-
-        # --- Hash Comparison and Notification ---
-        if is_confirmed_menu:
-            existing_hash = calculate_hash(IMAGE_SAVE_PATH)
-            new_hash = hashlib.sha256(image_content).hexdigest()
-            if existing_hash == new_hash:
-                print("The new image is the same as the existing one (and confirmed as menu if OCR ran). No update needed.")
-            else:
-                print("The new image is different (and confirmed as menu if OCR ran). Updating and sending notification.")
-                with open(IMAGE_SAVE_PATH, 'wb') as img_file:
-                    img_file.write(image_content)
-                print(f"Image updated and saved as '{IMAGE_SAVE_PATH}'")
-
-                # --- Caption Generation ---
-                try:
-                    # Get the current date when the script runs
-                    today = datetime.date.today()
-                    # Calculate the Monday of the current week
-                    current_monday = get_current_monday(today)
-                    # Format the date string
-                    caption_date_str = f"{current_monday.strftime('%d %b %Y')}"
-
-                except Exception as e:
-                     # Fallback in case of unexpected error during date calculation
-                     print(f"Error generating caption date: {e}")
-                     caption_date_str = "current week"
-                # --- End Caption Generation ---
-
-                caption = f"Menu of the week starting {caption_date_str}\nSource: {latest_menu_post_url}"
-                # Print the caption to console
-                print(f"{caption}")
-
-                # --- Telegram ---
-                print("Sending a notification through telegram...")
-                send_telegram_photo(IMAGE_SAVE_PATH, caption)
-                # --- End Telegram ---
-        else:
-             print("Image content check failed (via OCR). Skipping hash comparison and notification.")
-
+        print(f"Downloaded {len(image_content)} bytes")
     except requests.exceptions.RequestException as e:
-        print(f"Error downloading image {img_url}: {e}")
-    except Exception as e:
-        print(f"An unexpected error occurred during image processing: {e}")
+        print(f"Error downloading image: {e}")
+        exit(1)
 
-else:
-    print(f"Could not find menu image URL on the post page: {latest_menu_post_url}")
-    exit(1)
+    # Step 4: OCR verification
+    is_confirmed_menu = perform_ocr_check(image_content)
+
+    # Step 5: Hash comparison and notification
+    if not is_confirmed_menu:
+        print("\nImage content check failed (via OCR). Skipping notification.")
+        exit(0)
+
+    existing_hash = calculate_hash(IMAGE_SAVE_PATH)
+    new_hash = hashlib.sha256(image_content).hexdigest()
+
+    if existing_hash == new_hash:
+        print("\nThe menu image is unchanged. No update needed.")
+        exit(0)
+
+    print("\nNew menu detected! Updating and sending notification.")
+    with open(IMAGE_SAVE_PATH, 'wb') as img_file:
+        img_file.write(image_content)
+    print(f"Image saved as '{IMAGE_SAVE_PATH}'")
+
+    # Generate caption
+    today = datetime.date.today()
+    current_monday = get_current_monday(today)
+    caption_date_str = current_monday.strftime('%d %b %Y')
+    caption = f"Menu of the week starting {caption_date_str}\nSource: {menu_post_url}"
+    print(f"\n{caption}")
+
+    # Send to Telegram
+    print("\nSending notification via Telegram...")
+    send_telegram_photo(IMAGE_SAVE_PATH, caption)
+
+
+if __name__ == "__main__":
+    main()
