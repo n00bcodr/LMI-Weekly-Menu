@@ -4,6 +4,7 @@ import os
 import hashlib
 import datetime
 import re
+import json
 from urllib.parse import urljoin
 from io import BytesIO
 
@@ -87,10 +88,15 @@ def construct_menu_url(monday_date):
     return f"{BASE_URL}/post/{slug}"
 
 
-def try_url(url):
+def try_url(url, use_bot_ua=False):
     """Check if a URL returns a valid page (HTTP 200)."""
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+        req_headers = HEADERS.copy()
+        if use_bot_ua:
+            # Wix does SSR (Server-Side Rendering) for known bots/crawlers,
+            # returning full HTML with images. Regular browsers get a JS shell.
+            req_headers['User-Agent'] = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+        resp = requests.get(url, headers=req_headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
         if resp.status_code == 200:
             return resp
         else:
@@ -120,7 +126,13 @@ def find_menu_post_url():
     for monday in [current_monday, previous_monday]:
         url = construct_menu_url(monday)
         print(f"  Trying: {url}")
-        resp = try_url(url)
+        # First try with bot UA to get SSR content (full HTML with images)
+        resp = try_url(url, use_bot_ua=True)
+        if resp:
+            print(f"  Found valid menu page (SSR): {url}")
+            return url, resp
+        # Fallback to normal UA
+        resp = try_url(url, use_bot_ua=False)
         if resp:
             print(f"  Found valid menu page: {url}")
             return url, resp
@@ -200,69 +212,103 @@ def find_menu_post_url():
     return None, None
 
 
-def extract_image_url(soup, page_url):
-    """Extract the menu image URL from the post page."""
-    img_url = None
-
-    # Method 1: data-pin-media attribute (Pinterest-style sharing)
-    img_tag_pin = soup.find('img', {'data-pin-media': True})
-    if img_tag_pin and img_tag_pin.get('data-pin-media'):
-        img_url = urljoin(page_url, img_tag_pin['data-pin-media'])
-        print(f"Found image URL using 'data-pin-media': {img_url}")
-        return img_url
-
-    # Method 2: Wix image in a figure/role=figure container
-    figure_tag = soup.find(['figure', 'div'], attrs={'role': 'figure'})
-    if figure_tag:
-        main_img = figure_tag.find('img', {'src': True})
-        if main_img:
-            img_url = urljoin(page_url, main_img['src'])
-            print(f"Found image URL using figure structure: {img_url}")
-            return img_url
-
-    # Method 3: Wix image component (data-hook="imageViewer")
-    wix_img = soup.find('img', {'data-hook': re.compile(r'image')})
-    if wix_img and wix_img.get('src'):
-        img_url = urljoin(page_url, wix_img['src'])
-        print(f"Found image URL using Wix imageViewer: {img_url}")
-        return img_url
-
-    # Method 4: Look for high-res Wix static media URLs in page source
+def extract_image_urls(soup, page_url):
+    """
+    Extract all menu image URLs from the post page.
+    Returns a list of full-resolution image URLs.
+    
+    The Wix blog post typically contains multiple images:
+    - First image: weekly overview/cover (landscape 1754x1240)
+    - Remaining images: daily menus (portrait 1240x1754)
+    """
+    image_urls = []
     page_text = str(soup)
-    wix_media_urls = re.findall(
-        r'(https://static\.wixstatic\.com/media/[a-f0-9]+~mv2\.[a-z]+(?:/v1/fill/[^"\'<>\s]+)?)',
-        page_text
-    )
-    if wix_media_urls:
-        # Pick the largest (longest URL usually has fill params for full size)
-        best = max(wix_media_urls, key=len)
-        print(f"Found image URL from Wix static media pattern: {best}")
-        return best
 
-    # Method 5: Largest image in article body
-    article_body = soup.find('article') or soup.find('div', {'data-hook': 'blog-post-body'}) or soup
-    all_imgs = article_body.find_all('img', {'src': True})
-    if all_imgs:
-        # Filter out tiny images (icons, avatars)
-        def img_size(img):
-            try:
-                return int(img.get('width', 0)) * int(img.get('height', 0))
-            except (ValueError, TypeError):
-                return 0
-        main_img = max(all_imgs, key=img_size, default=None)
-        if main_img:
-            img_url = urljoin(page_url, main_img['src'])
-            print(f"Found image URL using largest image fallback: {img_url}")
-            return img_url
+    # Method 1: data-pin-media attributes — these contain full-res URLs
+    # and are the most reliable source when the page is SSR'd by Wix.
+    pin_media_imgs = soup.find_all('img', {'data-pin-media': True})
+    for img in pin_media_imgs:
+        pin_url = img.get('data-pin-media', '')
+        if pin_url and 'logo' not in pin_url.lower():
+            full_url = urljoin(page_url, pin_url)
+            if full_url not in image_urls:
+                image_urls.append(full_url)
 
-    # Method 6: og:image meta tag
+    if image_urls:
+        print(f"Found {len(image_urls)} image(s) using 'data-pin-media' attributes")
+        return image_urls
+
+    # Method 2: wow-image elements with data-image-info JSON
+    # Wix uses <wow-image> custom elements with image metadata in a JSON attribute
+    wow_images = soup.find_all('wow-image', {'data-image-info': True})
+    for wow in wow_images:
+        try:
+            info = json.loads(wow.get('data-image-info', '{}'))
+            image_data = info.get('imageData', {})
+            uri = image_data.get('uri', '')
+            if uri and '~mv2' in uri and 'logo' not in uri.lower():
+                width = image_data.get('width', 1240)
+                height = image_data.get('height', 1754)
+                full_url = f"https://static.wixstatic.com/media/{uri}/v1/fill/w_{width},h_{height},al_c,q_90/{uri}"
+                if full_url not in image_urls:
+                    image_urls.append(full_url)
+        except (json.JSONDecodeError, KeyError):
+            continue
+
+    if image_urls:
+        print(f"Found {len(image_urls)} image(s) using wow-image data-image-info")
+        return image_urls
+
+    # Method 3: og:image meta tag (single image, usually the cover)
     og_img = soup.find('meta', property='og:image')
     if og_img and og_img.get('content'):
         img_url = og_img['content']
+        img_url = re.sub(r'/v1/fill/[^/]+/', '/v1/fill/w_1754,h_1240,al_c,q_90/', img_url)
         print(f"Found image URL from og:image meta tag: {img_url}")
-        return img_url
+        return [img_url]
 
-    return None
+    # Method 4: Wix static media URLs in page source (regex fallback)
+    wix_media_urls = re.findall(
+        r'(https://static\.wixstatic\.com/media/[a-f0-9_]+~mv2\.[a-z]+(?:/v1/fill/[^"\'<>\s]+)?)',
+        page_text
+    )
+    if wix_media_urls:
+        # Deduplicate by base URI (strip fill params for comparison)
+        seen_uris = set()
+        for url in wix_media_urls:
+            if 'logo' in url.lower():
+                continue
+            # Extract base URI
+            uri_match = re.search(r'/media/([a-f0-9_]+~mv2\.[a-z]+)', url)
+            if uri_match:
+                uri = uri_match.group(1)
+                if uri not in seen_uris:
+                    seen_uris.add(uri)
+                    # Construct full-res URL
+                    full_url = f"https://static.wixstatic.com/media/{uri}/v1/fill/w_1240,h_1754,al_c,q_90/{uri}"
+                    image_urls.append(full_url)
+
+        if image_urls:
+            print(f"Found {len(image_urls)} image(s) from Wix static media URLs in source")
+            return image_urls
+
+    # Method 5: Any large img src (last resort)
+    all_imgs = soup.find_all('img', {'src': True})
+    for img in all_imgs:
+        src = img.get('src', '')
+        if 'logo' in src.lower() or 'avatar' in src.lower():
+            continue
+        # Check for reasonable size in URL params
+        width_match = re.search(r'w_(\d+)', src)
+        if width_match and int(width_match.group(1)) > 400:
+            full_url = urljoin(page_url, src)
+            if full_url not in image_urls:
+                image_urls.append(full_url)
+
+    if image_urls:
+        print(f"Found {len(image_urls)} image(s) using img src fallback")
+
+    return image_urls
 
 
 def perform_ocr_check(image_content):
@@ -318,31 +364,66 @@ def main():
             print(f"Failed to fetch menu post page: {e}")
             exit(1)
 
-    img_url = extract_image_url(soup, menu_post_url)
+    image_urls = extract_image_urls(soup, menu_post_url)
 
-    if not img_url:
-        print(f"\nCould not find menu image URL on the post page: {menu_post_url}")
+    if not image_urls:
+        print(f"\nCould not find any menu image URLs on the post page: {menu_post_url}")
         exit(1)
 
-    # Step 3: Download the image
-    try:
-        print(f"\nDownloading image from: {img_url}")
-        img_response = requests.get(img_url, headers=HEADERS, timeout=60)
-        img_response.raise_for_status()
-        image_content = img_response.content
-        print(f"Downloaded {len(image_content)} bytes")
-    except requests.exceptions.RequestException as e:
-        print(f"Error downloading image: {e}")
-        exit(1)
+    print(f"\nFound {len(image_urls)} image(s) to process")
 
-    # Step 4: OCR verification
-    is_confirmed_menu = perform_ocr_check(image_content)
+    # Step 3: Download images and find the best menu image
+    # The first image is typically the weekly overview (landscape),
+    # try it first, then fall back to subsequent images
+    image_content = None
+    used_url = None
+
+    for i, img_url in enumerate(image_urls):
+        try:
+            print(f"\nDownloading image {i+1}/{len(image_urls)}: {img_url}")
+            img_response = requests.get(img_url, headers=HEADERS, timeout=60)
+            img_response.raise_for_status()
+            content = img_response.content
+            print(f"Downloaded {len(content)} bytes")
+
+            # Skip very small files (likely broken or placeholder)
+            if len(content) < 10000:
+                print(f"  Skipping - too small ({len(content)} bytes), likely not a menu image")
+                continue
+
+            # Step 4: OCR verification on this image
+            if perform_ocr_check(content):
+                image_content = content
+                used_url = img_url
+                print(f"  This image passed OCR check - using it!")
+                break
+            else:
+                print(f"  OCR check failed for this image, trying next...")
+        except requests.exceptions.RequestException as e:
+            print(f"  Error downloading: {e}")
+            continue
+
+    if not image_content:
+        # If OCR failed on all images but we have content, use the first large one
+        # (OCR might fail due to image format issues but the image could still be valid)
+        print("\nOCR check failed on all images. Trying first large image without OCR...")
+        for img_url in image_urls:
+            try:
+                img_response = requests.get(img_url, headers=HEADERS, timeout=60)
+                img_response.raise_for_status()
+                if len(img_response.content) > 50000:  # At least 50KB
+                    image_content = img_response.content
+                    used_url = img_url
+                    print(f"Using first large image ({len(image_content)} bytes): {img_url}")
+                    break
+            except requests.exceptions.RequestException:
+                continue
+
+    if not image_content:
+        print("\nFailed to download any valid menu image. Exiting.")
+        exit(1)
 
     # Step 5: Hash comparison and notification
-    if not is_confirmed_menu:
-        print("\nImage content check failed (via OCR). Skipping notification.")
-        exit(0)
-
     existing_hash = calculate_hash(IMAGE_SAVE_PATH)
     new_hash = hashlib.sha256(image_content).hexdigest()
 
