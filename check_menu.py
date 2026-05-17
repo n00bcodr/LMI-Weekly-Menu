@@ -75,7 +75,14 @@ def send_telegram_photo(photo_path, caption):
 
 
 def get_current_monday(date):
-    """Get the Monday of the week in which the given date falls."""
+    """Get the Monday of the current or coming week.
+
+    On Sunday (weekday=6), return the *next* Monday (tomorrow),
+    since the script runs on Sunday evening to fetch the upcoming week's menu.
+    On any other day, return the Monday of the current week.
+    """
+    if date.weekday() == 6:  # Sunday
+        return date + datetime.timedelta(days=1)
     return date - datetime.timedelta(days=date.weekday())
 
 
